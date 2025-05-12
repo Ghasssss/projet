@@ -1,4 +1,4 @@
-import os
+import dotenv
 import gradio as gr
 import yfinance as yf
 import pandas as pd
@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Mistral client setup
-api_key = "7FbaVyZq544wID4c6mAbzhVgUCfHpyKF"
+api_key = dotenv.get_key(dotenv.find_dotenv(), "MISTRAL_API_KEY")
 model = "mistral-large-latest"
 client = Mistral(api_key=api_key)
 
