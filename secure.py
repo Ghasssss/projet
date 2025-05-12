@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta
 import uvicorn
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +42,7 @@ fake_users_db = {
         "username": "johndoe",
         "full_name": "John Doe",
         "email": "johndoe@example.com",
-        "hashed_password": "$2b$12$KIX4L3Jz72.99koKjT8ZteQ1Yrd0eIMiXg0JmcVvkpTKYPJ1ujqWy",  # hash for 'secret'
+        "hashed_password": "$2b$12$ayEqHb6QoTjAFHamLzYiM.UPd.dMgKqpTjLIMD15ztMHXTG.xqaWG",  # hash for 'secret'
         "disabled": False,
         "role": "admin"
     }
@@ -81,9 +82,13 @@ def get_user(db, username: str):
         return UserInDB(**user_dict)
 
 def authenticate_user(fake_db, username: str, password: str):
+    print("Authenticating:", username, password)
     user = get_user(fake_db, username)
     if not user:
+        print("User not found")
         return False
+    print("Hashed password from DB:", user.hashed_password)
+    print("Password check:", verify_password(password, user.hashed_password))
     if not verify_password(password, user.hashed_password):
         return False
     return user
@@ -604,84 +609,196 @@ def process_request(message, ticker_input, period_input, history):
 
 # Main Gradio interface setup
 demo = gr.Blocks(theme=gr.themes.Base())
+
+
+# Authentification
 def authenticate_and_proceed(username, password):
-    response = requests.post("http://localhost:8000/token", data={"username": username, "password": password})
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    data = urlencode({
+        "username": username,
+        "password": password
+    })
     
+    response = requests.post("http://localhost:8000/token", data=data, headers=headers)
+
     if response.status_code == 200:
         token = response.json()["access_token"]
-        return "Authentification réussie! Vous êtes redirigé vers l'analyse financière.", token
+        return "Authentification réussie!", token, gr.update(visible=False), gr.update(visible=True)
     else:
-        return "Échec de l'authentification, essayez à nouveau.", None
+        return f"Échec de l'authentification ({response.status_code})", None, gr.update(visible=True), gr.update(visible=False)
 
-def login_interface():
-    with gr.Blocks() as login_demo:
-        gr.Markdown("## Connectez-vous pour accéder à l'assistant financier")
-        
-        with gr.Row():
-            username_input = gr.Textbox(label="Nom d'utilisateur", elem_id="username")
-            password_input = gr.Textbox(label="Mot de passe", elem_id="password", type="password")
-            login_button = gr.Button("Se connecter")
-        
-        login_status = gr.Textbox(label="Statut de la connexion", interactive=False)
-        token_output = gr.Textbox(label="Token d'authentification", interactive=False)
-
-        # Lier la fonction d'authentification et la sortie du token
-        login_button.click(fn=authenticate_and_proceed, 
-                           inputs=[username_input, password_input], 
-                           outputs=[login_status, token_output])
-
-        return login_demo
-# Fonction pour l'interface financière après la connexion
-def financial_analysis_interface(token):
-    with gr.Blocks(theme=gr.themes.Base()) as demo:
-        gr.Markdown("# Advanced Financial Analysis Assistant")
-        
-        with gr.Row():
-            with gr.Column(scale=1):
-                chatbot = gr.Chatbot(height=600, value=[])
-                with gr.Row():
-                    ticker_input = gr.Textbox(label="Stock Ticker (optional, e.g., AAPL)", scale=1)
-                    period_input = gr.Dropdown(
-                        choices=["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
-                        label="Time Period",
-                        value="1y",
-                        scale=1
-                    )
-                message = gr.Textbox(label="Type your message here...", scale=2)
-                with gr.Row():
-                    submit = gr.Button("Send", variant="primary")
-                    clear = gr.Button("Clear All", variant="secondary")
-            
-            with gr.Column(scale=1):
-                with gr.Tabs():
-                    with gr.Tab("Stock Price"):
-                        stock_plot = gr.Plot(label="Stock Price Analysis")
-                    with gr.Tab("Technical Indicators"):
-                        technical_plot = gr.Plot(label="Technical Indicators")
-                    with gr.Tab("Volume Analysis"):
-                        volume_analysis_plot = gr.Plot(label="Volume Analysis")
-        
-        submit.click(
-            fn=process_request,
-            inputs=[message, ticker_input, period_input, chatbot],
-            outputs=[chatbot, stock_plot, technical_plot, volume_analysis_plot]
-        )
-        
-        clear.click(
-            fn=clear_outputs,
-            inputs=[],
-            outputs=[chatbot, stock_plot, technical_plot, volume_analysis_plot]
-        )
+# Placeholder pour la logique de traitement
+def process_request(message, ticker_input, period_input, history):
+    """Process user request with enhanced analysis and visualization"""
     
-    return demo
-login_demo = login_interface()
+    # Initialize history if None
+    if history is None:
+        history = []
+    
+    history.append([message, None])
+    
+    try:
+        # Load API key
 
-# Si la connexion est réussie, rediriger vers l'interface financière
-def on_successful_login(token):
-    if token:
-        return financial_analysis_interface(token)
-    else:
-        return login_demo
+        apikey = api_key
+    except Exception as e:
+        history[-1][1] = f"Error loading API key: {str(e)}"
+        return history, None, None, None  # Return all expected outputs
+    
+    # Initialize OpenAI client
+    client = Mistral(api_key=apikey)
+    
+    # Step 1: Check if ticker is explicitly provided in input field
+    selected_ticker = None
+    if ticker_input and ticker_input.strip():
+        try:
+            ticker = yf.Ticker(ticker_input.strip().upper())
+            info = ticker.info
+            if info:
+                selected_ticker = ticker_input.strip().upper()
+                print(f"Using provided ticker: {selected_ticker}")
+            else:
+                history[-1][1] = f"Error: Invalid ticker symbol {ticker_input}"
+                return history, None, None, None
+        except Exception as e:
+            history[-1][1] = f"Error validating ticker {ticker_input}: {str(e)}"
+            return history, None, None, None
+    
+    # Step 2: If no ticker provided, look for explicit ticker mentions in message
+    if not selected_ticker:
+        explicit_patterns = [
+            r'\$([A-Z]{1,5})\b',  # $AAPL
+            r'ticker[:\s]+([A-Z]{1,5})\b',  # ticker: AAPL
+            r'symbol[:\s]+([A-Z]{1,5})\b',  # symbol: AAPL
+            r'\b([A-Z]{1,5})(?=\s+(?:stock|shares|price|ticker))\b'  # AAPL stock
+        ]
+        
+        for pattern in explicit_patterns:
+            matches = re.findall(pattern, message.upper())
+            if matches:
+                for match in matches:
+                    ticker_symbol = match[0] if isinstance(match, tuple) else match
+                    try:
+                        ticker = yf.Ticker(ticker_symbol)
+                        info = ticker.info
+                        if info:
+                            selected_ticker = ticker_symbol
+                            print(f"Found explicit ticker mention: {selected_ticker}")
+                            break
+                    except:
+                        continue
+            if selected_ticker:
+                break
+    
+    # If still no ticker found, try AI extraction
+    if not selected_ticker:
+        try:
+            extractor = TickerExtractor(apikey)
+            selected_ticker = extractor.get_ticker_from_ai(message)
+        except Exception as e:
+            print(f"Error in AI ticker extraction: {str(e)}")
+    
+    # If no ticker found after all attempts, return error message
+    if not selected_ticker:
+        response = "I couldn't identify a specific stock ticker. Please either:\n" \
+                  "1. Use the ticker input field (e.g., AAPL), or\n" \
+                  "2. Mention the company name or ticker in your message (e.g., 'Analyze Tesla' or 'Check $TSLA')"
+        history[-1][1] = response
+        return history, None, None, None
+    
+    # Process the request with the identified ticker
+    try:
+        agent = FinancialAgent(api_key=apikey)
+        df = agent.get_stock_data(selected_ticker, period_input)
+        
+        if isinstance(df, pd.DataFrame):
+            df = agent.create_technical_analysis(df)
+            agent.df = df
+            agent.selected_ticker = selected_ticker
+            
+            # Create plots
+            stock_plot = FinancialPlotter.create_stock_plot(df, selected_ticker)
+            technical_plot = FinancialPlotter.create_technical_indicators_plot(df)
+            volume_analysis_plot = FinancialPlotter.create_volume_analysis_plot(df)
+            
+            # Generate response incorporating the analysis
+            response = agent.get_response(
+                f"{message}\nAnalysis for {selected_ticker} stock based on your query:", 
+                include_analysis=True
+            )
+            
+            history[-1][1] = f"Using ticker: {selected_ticker}\n\n{response}"
+            return history, stock_plot, technical_plot, volume_analysis_plot
+            
+        else:
+            error_msg = f"Error: Unable to fetch data for {selected_ticker}"
+            history[-1][1] = error_msg
+            return history, None, None, None
+            
+    except Exception as e:
+        error_msg = f"An error occurred: {str(e)}"
+        history[-1][1] = error_msg
+        return history, None, None, None
+
+def clear_outputs():
+    return [], None, None, None
+
+# Gradio interface globale
+with gr.Blocks(theme=gr.themes.Base()) as demo:
+    token_state = gr.State()
+
+    # Page de connexion
+    with gr.Column(visible=True) as login_view:
+        gr.Markdown("## Connectez-vous pour accéder à l'assistant financier")
+        username_input = gr.Textbox(label="Nom d'utilisateur")
+        password_input = gr.Textbox(label="Mot de passe", type="password")
+        login_button = gr.Button("Se connecter")
+        login_status = gr.Textbox(label="Statut", interactive=False)
+
+    # Page d'analyse financière
+    with gr.Row(visible=False) as analysis_view:
+        with gr.Column(scale=1):
+            chatbot = gr.Chatbot(height=600, value=[])
+            with gr.Row():
+                ticker_input = gr.Textbox(label="Stock Ticker (optional, e.g., AAPL)", scale=1)
+                period_input = gr.Dropdown(
+                    choices=["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
+                    label="Time Period",
+                    value="1y",
+                    scale=1
+                )
+            message = gr.Textbox(label="Type your message here...", scale=2)
+            with gr.Row():
+                submit = gr.Button("Send", variant="primary")
+                clear = gr.Button("Clear All", variant="secondary")
+        
+        with gr.Column(scale=1):
+            with gr.Tabs():
+                with gr.Tab("Stock Price"):
+                    stock_plot = gr.Plot(label="Stock Price Analysis")
+                with gr.Tab("Technical Indicators"):
+                    technical_plot = gr.Plot(label="Technical Indicators")
+                with gr.Tab("Volume Analysis"):
+                    volume_analysis_plot = gr.Plot(label="Volume Analysis")
+
+    submit.click(
+        fn=process_request,
+        inputs=[message, ticker_input, period_input, chatbot],
+        outputs=[chatbot, stock_plot, technical_plot, volume_analysis_plot]
+    )
+    
+    clear.click(
+        fn=clear_outputs,
+        inputs=[],
+        outputs=[chatbot, stock_plot, technical_plot, volume_analysis_plot]
+    )
+
+    # Bouton de login → transition
+    login_button.click(
+        fn=authenticate_and_proceed,
+        inputs=[username_input, password_input],
+        outputs=[login_status, token_state, login_view, analysis_view]
+    )
 if __name__ == "__main__":
     # Load API key
     OPENAI_CONFIG_FILE = 'auth.yaml'
@@ -693,4 +810,4 @@ if __name__ == "__main__":
     client = Mistral(api_key=apikey)
     
     # Launch the Gradio interface
-    login_demo.launch()
+    demo.launch()
