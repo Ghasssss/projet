@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Mistral client setup
-api_key = "7FbaVyZq544wID4c6mAbzhVgUCfHpyKF"
+api_key = ""
 model = "mistral-large-latest"
 client = Mistral(api_key=api_key)
 
